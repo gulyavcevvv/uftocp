@@ -1,0 +1,169 @@
+<?php
+
+/**
+ * @file
+ * Файл modul модуля uftocp.
+ */
+
+ /**
+ * Implements hook_commerce_checkout_pane_info_alter().
+ *
+ * Изменяем callbacks панели commerce_order_account_pane.
+ */
+function uftocp_commerce_checkout_pane_info_alter(&$checkout_panes) {
+  $checkout_panes['account']['callbacks']['review'] = '_uftocp_commerce_order_account_pane_review';
+  $checkout_panes['account']['callbacks']['checkout_form_submit'] = '_uftocp_form_commerce_checkout_form_checkout_submit';
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ *
+ * Изменяем форму настроек панели commerce_order_account_pane.
+ */
+function uftocp_form_commerce_checkout_pane_settings_form_alter(&$form, &$form_state, $form_id) {
+
+  foreach (field_info_instances('user', 'user') as $key => $value) {
+    $form['settings']['commerce_order_account_pane_uftocp_field_' . $key] = array(
+      '#type' => 'checkbox',
+      '#disabled' => $value['required'],
+      '#title' => t('Display the account information pane for authenticated users field @name', array('@name' => $value['label'])),
+      '#default_value' => $value['required'] ? true : variable_get('commerce_order_account_pane_uftocp_field_' . $key, FALSE)
+    );
+  }
+
+}
+
+/**
+ * Implements hook_form_BASE_FORM_ID_alter().
+ *
+ * Изменяем форму подтверждения заказа.
+ */
+function uftocp_form_commerce_checkout_form_checkout_alter(&$form, &$form_state, $form_id) {
+  if (isset($form['account'])) {
+    global $user;
+
+    $order = $form_state['build_info']['args'][0];
+  
+    // If the user is logged in...
+    if ($user->uid > 0) {
+      // And the pane has been configured to display account information...
+      if (variable_get('commerce_order_account_pane_auth_display', FALSE)) {
+        $user = user_load($user->uid);
+        foreach (field_info_instances('user', 'user') as $key => $value) {
+          if ($value['required'] or variable_get('commerce_order_account_pane_uftocp_field_' . $key, FALSE)) {
+            $form['account']['phone'] = array(
+              '#type' => 'item',
+              '#title' => $value['label'],
+              '#markup' => field_get_items('user', $user, $key)[0]['value'],
+            );
+          }
+        }
+        
+      }
+    }
+    else {
+  
+      $stduser = new stdClass();
+      foreach (field_info_instances('user', 'user') as $key => $value) {
+        if ($value['required'] or variable_get('commerce_order_account_pane_uftocp_field_' . $key, FALSE)) {
+
+          // Set #parents to 'top-level' if it doesn't exist.
+          $form['account']['login']['#parents'] = array('account', 'login');
+
+          if (isset($order->data[$key])) {
+            $stduser->{$key}[LANGUAGE_NONE] = $order->data[$key];
+          }
+          _uftocp_field_attach_form($key, 'user', $stduser, $form['account']['login'], $form_state, LANGUAGE_NONE);
+
+        }
+      }
+  
+    }
+
+  }
+}
+
+/**
+ * Account pane: checkout form submission callback.
+ */
+function _uftocp_form_commerce_checkout_form_checkout_submit($form, &$form_state, $checkout_pane, $order) {
+
+  if (!empty($form_state['values'][$checkout_pane['pane_id']])) {
+    $pane_values = $form_state['values'][$checkout_pane['pane_id']];
+
+    if (!empty($pane_values['login']['mail'])) {
+      $order->mail = $pane_values['login']['mail'];
+    }
+
+    foreach (field_info_instances('user', 'user') as $key => $value) {
+      if ($value['required'] or variable_get('commerce_order_account_pane_uftocp_field_' . $key, FALSE)) {
+        if (isset($pane_values['login'][$key][LANGUAGE_NONE])) {
+          $change = true;
+          $order->data[$key] = $pane_values['login'][$key][LANGUAGE_NONE];
+        }
+      }
+    }
+
+  }
+}
+
+/**
+ * Дополнительный сабмит к форме подтверждения заказа.
+ */
+function uftocp_form_commerce_checkout_form_checkout_submit($form, &$form_state) {
+
+  $order = commerce_order_load($form_state['order']->order_id);
+  $values = $form_state['values'];
+  $change = false;
+  foreach (field_info_instances('user', 'user') as $key => $value) {
+    if ($value['required'] or variable_get('commerce_order_account_pane_uftocp_field_' . $key, FALSE)) {
+      if (isset($values[$key][LANGUAGE_NONE])) {
+        $change = true;
+        $order->data[$key] = $values[$key][LANGUAGE_NONE];
+      }
+    }
+  }
+  if ($change) {
+    commerce_order_save($order);
+  }
+}
+
+function _uftocp_field_attach_form($field_name, $entity_type, $entity, &$form, &$form_state, $langcode = NULL) {
+  // If no language is provided use the default site language.
+  $options = array(
+    'language' => field_valid_language($langcode),
+    'default' => TRUE,
+  );
+  module_load_include("inc","ctools","includes/fields");
+
+  $form += (array) ctools_field_invoke_field($field_name, 'form', $entity_type, $entity, $form, $form_state, $options);
+}
+
+/**
+ * Просмотр результатов панели commerce_order_account_pane.
+ */
+function _uftocp_commerce_order_account_pane_review($form, $form_state, $checkout_pane, $order) {
+  $content = array();
+
+  $content[] = array(
+    '#type' => 'item',
+    '#title' => t('E-mail address'),
+    '#markup' => check_plain($order->mail),
+  );
+  $stduser = new stdClass();
+  foreach (field_info_instances('user', 'user') as $key => $value) {
+    if ($value['required'] or variable_get('commerce_order_account_pane_uftocp_field_' . $key, FALSE)) {
+      if (isset($order->data[$key])) {
+        foreach ($order->data[$key] as $delta => $field) {
+          $stduser->{$key}[LANGUAGE_NONE] = $field;
+          $view_field = field_view_value('user', $stduser, $key, $field);
+          $view_field['#type'] = 'item';
+          $view_field['#title'] = $value['label'];
+          $content[] = $view_field;
+        }
+      }
+    }
+  }
+
+  return drupal_render($content);
+}

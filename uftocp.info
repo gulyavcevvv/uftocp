@@ -1,0 +1,7 @@
+name = "uftocp"
+description = "User field to commerce panel account"
+package = Commerce (contrib)
+core = 7.x
+
+dependencies[] = commerce_checkout
+dependencies[] = ctools
